@@ -310,8 +310,10 @@ export function drawBuilding3d(
     roofMesh = new THREE.Mesh(roofGeo, roofMat);
   }
 
-  scene.add(wallMesh);
-  scene.add(roofMesh);
+  // Group all building meshes so rotation is applied together
+  const buildingGroup = new THREE.Group();
+  buildingGroup.add(wallMesh);
+  buildingGroup.add(roofMesh);
 
   // ------------------------------------------------------------------
   // Green roof overlay (score-based)
@@ -344,18 +346,29 @@ export function drawBuilding3d(
       opacity: 0.85,
     });
     greenMesh = new THREE.Mesh(greenGeo, greenMat);
-    scene.add(greenMesh);
+    buildingGroup.add(greenMesh);
   }
 
+  scene.add(buildingGroup);
+
   // ------------------------------------------------------------------
-  // Render once (static scene)
+  // Rotation animation
   // ------------------------------------------------------------------
-  renderer.render(scene, camera);
+  let rafId: number;
+
+  function animate() {
+    rafId = requestAnimationFrame(animate);
+    buildingGroup.rotation.y += 0.005;
+    renderer.render(scene, camera);
+  }
+
+  animate();
 
   // ------------------------------------------------------------------
   // Cleanup
   // ------------------------------------------------------------------
   function cleanup() {
+    cancelAnimationFrame(rafId);
     wallMesh.geometry.dispose();
     roofMesh.geometry.dispose();
     if (greenMesh) greenMesh.geometry.dispose();
