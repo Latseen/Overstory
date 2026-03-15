@@ -118,7 +118,7 @@ interface BuildingTier {
 // Each profile describes the stepped silhouette of the building.
 const FAMOUS_PROFILES: Record<string, BuildingTier[]> = {
   // Empire State Building — Art Deco setbacks + mooring mast + spire
-  '1008350047': [
+  '1008350041': [
     { fromFrac: 0.00, toFrac: 0.14, scale: 1.00 },
     { fromFrac: 0.14, toFrac: 0.48, scale: 0.80 },
     { fromFrac: 0.48, toFrac: 0.63, scale: 0.60 },
@@ -128,7 +128,7 @@ const FAMOUS_PROFILES: Record<string, BuildingTier[]> = {
     { fromFrac: 0.92, toFrac: 1.00, scale: 0.05 },
   ],
   // 30 Rockefeller Plaza — stepped Art Deco slab
-  '1012390001': [
+  '1012657501': [
     { fromFrac: 0.00, toFrac: 0.10, scale: 1.00 },
     { fromFrac: 0.10, toFrac: 0.50, scale: 0.86 },
     { fromFrac: 0.50, toFrac: 0.68, scale: 0.68 },
