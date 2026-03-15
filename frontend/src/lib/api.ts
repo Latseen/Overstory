@@ -14,6 +14,16 @@ export interface GreenRoofScore {
   notes: string[];
 }
 
+export interface GeoJSONPolygon {
+  type: 'Polygon';
+  coordinates: [number, number][][];
+}
+
+export interface GeoJSONMultiPolygon {
+  type: 'MultiPolygon';
+  coordinates: [number, number][][][];
+}
+
 export interface Building {
   bbl: string;
   address: string;
@@ -24,6 +34,9 @@ export interface Building {
   building_class: string;
   lot_area: number | null;
   bld_area: number | null;
+  height_ft: number | null;
+  footprint_area: number | null;
+  the_geom: GeoJSONPolygon | GeoJSONMultiPolygon | null;
   zoning_district: string;
   land_use: string;
   owner_name: string;

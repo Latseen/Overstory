@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -5,6 +7,7 @@ from dataclasses import asdict
 
 from services.geocoder import geocode_address
 from services.pluto import get_building
+from services.footprint import get_footprint
 from services.scorer import score_green_roof
 
 app = FastAPI(title="Trellis API", version="0.1.0")
@@ -34,11 +37,21 @@ async def score_address(req: ScoreRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    # 2. Fetch PLUTO
+    # 2. Fetch PLUTO + Building Footprints in parallel
     try:
-        building = await get_building(geo["bbl"])
+        building, footprint = await asyncio.gather(
+            get_building(geo["bbl"]),
+            get_footprint(geo["bbl"]),
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+    if footprint:
+        building.update(footprint)
+    else:
+        building["height_ft"] = None
+        building["footprint_area"] = None
+        building["the_geom"] = None
 
     # 3. Score
     result = score_green_roof(building)

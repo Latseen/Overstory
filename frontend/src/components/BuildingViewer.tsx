@@ -1,15 +1,13 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { drawBuilding, type BuildingData } from '@/lib/isometric';
+import { drawBuilding3d } from '@/lib/building3d';
+import type { Building } from '@/lib/api';
 
 interface Props {
-  building: BuildingData;
+  building: Building;
   score: number;
 }
-
-const CW = 400;
-const CH = 300;
 
 export default function BuildingViewer({ building, score }: Props) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -17,18 +15,15 @@ export default function BuildingViewer({ building, score }: Props) {
   useEffect(() => {
     const canvas = ref.current;
     if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    drawBuilding(ctx, building, score, CW, CH);
+    const scene = drawBuilding3d(canvas, { building, score });
+    return () => scene.cleanup();
   }, [building, score]);
 
   return (
     <canvas
       ref={ref}
-      width={CW}
-      height={CH}
-      style={{ imageRendering: 'pixelated' }}
-      className="w-full h-auto max-w-sm"
+      style={{ width: '100%', height: '300px', display: 'block' }}
+      className="max-w-sm"
     />
   );
 }
