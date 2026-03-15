@@ -121,30 +121,54 @@ function ringToLocalFt(ring: Ring, cx: number, cy: number): [number, number][] {
   ]);
 }
 
-function centroid(ring: Ring): [number, number] {
-  let sx = 0, sy = 0;
-  for (const [x, y] of ring) { sx += x; sy += y; }
-  return [sx / ring.length, sy / ring.length];
+// Signed area > 0 → CCW (correct for Three.js), < 0 → CW (must reverse)
+function signedArea2D(pts: [number, number][]): number {
+  let area = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const j = (i + 1) % pts.length;
+    area += pts[i][0] * pts[j][1] - pts[j][0] * pts[i][1];
+  }
+  return area / 2;
+}
+
+function bboxCenter(ring: Ring): [number, number] {
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const [x, y] of ring) {
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+  }
+  return [(minX + maxX) / 2, (minY + maxY) / 2];
 }
 
 type GeoJSONGeom =
   | { type: 'Polygon'; coordinates: Ring[] }
   | { type: 'MultiPolygon'; coordinates: Ring[][] };
 
-// Returns the largest ring (outer boundary) of the footprint as local-ft coords.
-function footprintToLocalFt(geom: GeoJSONGeom): [number, number][][] {
-  let rings: Ring[];
+// Returns the outer ring of the footprint as local-ft coords, CCW-wound.
+function footprintToLocalFt(geom: GeoJSONGeom): [number, number][] {
+  let outerRing: Ring;
   if (geom.type === 'Polygon') {
-    rings = [geom.coordinates[0]];
+    outerRing = geom.coordinates[0];
   } else {
-    // MultiPolygon: use the polygon whose outer ring has the most points
-    rings = geom.coordinates.map(poly => poly[0]);
-    rings.sort((a, b) => b.length - a.length);
-    rings = [rings[0]];
+    // MultiPolygon: pick the polygon with the largest bounding box area
+    const polys = geom.coordinates.map(poly => poly[0]);
+    polys.sort((a, b) => {
+      const bboxArea = (r: Ring) => {
+        const xs = r.map(p => p[0]), ys = r.map(p => p[1]);
+        return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+      };
+      return bboxArea(b) - bboxArea(a);
+    });
+    outerRing = polys[0];
   }
 
-  const [cx, cy] = centroid(rings[0]);
-  return rings.map(r => ringToLocalFt(r, cx, cy));
+  const [cx, cy] = bboxCenter(outerRing);
+  const local = ringToLocalFt(outerRing, cx, cy) as [number, number][];
+
+  // Ensure CCW winding — Three.js Shape treats CW as a hole
+  if (signedArea2D(local) < 0) local.reverse();
+
+  return local;
 }
 
 // ---------------------------------------------------------------------------
@@ -223,8 +247,7 @@ export function drawBuilding3d(
 
   if (building.the_geom) {
     // Real footprint extrusion
-    const localRings = footprintToLocalFt(building.the_geom as GeoJSONGeom);
-    const outerRing = localRings[0];
+    const outerRing = footprintToLocalFt(building.the_geom as GeoJSONGeom);
 
     const shape = new THREE.Shape();
     shape.moveTo(outerRing[0][0], outerRing[0][1]);
@@ -296,9 +319,7 @@ export function drawBuilding3d(
   let greenMesh: THREE.Mesh | null = null;
   if (score > 25 && building.the_geom) {
     const coverage = Math.min((score - 25) / 75, 1);
-    const geom = building.the_geom as GeoJSONGeom;
-    const localRings = footprintToLocalFt(geom);
-    const outerRing = localRings[0];
+    const outerRing = footprintToLocalFt(building.the_geom as GeoJSONGeom);
 
     const greenShape = new THREE.Shape();
     greenShape.moveTo(outerRing[0][0], outerRing[0][1]);
