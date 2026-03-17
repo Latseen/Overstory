@@ -24,6 +24,12 @@ export interface GeoJSONMultiPolygon {
   coordinates: [number, number][][][];
 }
 
+export interface OsmPart {
+  geometry: GeoJSONPolygon;
+  height_ft: number | null;
+  min_height_ft: number;
+}
+
 export interface Building {
   bbl: string;
   address: string;
@@ -37,6 +43,7 @@ export interface Building {
   height_ft: number | null;
   footprint_area: number | null;
   the_geom: GeoJSONPolygon | GeoJSONMultiPolygon | null;
+  osm_parts: OsmPart[];
   zoning_district: string;
   land_use: string;
   owner_name: string;

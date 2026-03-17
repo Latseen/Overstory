@@ -1,12 +1,14 @@
 // Three.js isometric building renderer using real GeoJSON footprint geometry.
 //
-// Footprint (the_geom, WGS84) is projected to local feet, extruded to height_ft,
-// and rendered with an OrthographicCamera at a true isometric angle.
-//
-// Era and building-class-based materials are applied to walls and roof.
+// Rendering priority:
+//   1. OSM building:part sections — real 3D geometry from the OSM community,
+//      giving accurate setbacks / crowns for any building they've modelled.
+//   2. Plain extrusion of the_geom — works perfectly for buildings with a
+//      distinctive footprint (Flatiron, etc.) that OSM hasn't modelled in 3D.
+//   3. Rectangular fallback from PLUTO area data.
 
 import * as THREE from 'three';
-import type { Building } from './api';
+import type { Building, OsmPart } from './api';
 
 // ---------------------------------------------------------------------------
 // Era classification
@@ -23,159 +25,80 @@ function getEra(yearBuilt: number | null): Era {
   return 'modern';
 }
 
-// Returns [wallColor, roofColor, accentColor] as hex numbers
-function getBuildingColors(cls: string, era: Era): [number, number, number] {
+// Returns [wallColor, roofColor] as hex numbers
+function getBuildingColors(cls: string, era: Era): [number, number] {
   const prefix = (cls ?? '').charAt(0).toUpperCase();
 
   // D — elevator apartments (brick / terra cotta)
   if (prefix === 'D') {
-    if (era === 'gilded') return [0x8b4a32, 0x6b3020, 0xa06040];
-    if (era === 'prewar') return [0xa05830, 0x7a3820, 0xb87050];
-    if (era === 'artdeco') return [0xb06040, 0x8a4430, 0xc87050];
-    if (era === 'postwar') return [0x907870, 0x706050, 0xb09080];
-    return [0x8090a0, 0x607080, 0xa0b0c0]; // modern — glass/concrete
+    if (era === 'gilded') return [0x8b4a32, 0x6b3020];
+    if (era === 'prewar') return [0xa05830, 0x7a3820];
+    if (era === 'artdeco') return [0xb06040, 0x8a4430];
+    if (era === 'postwar') return [0x907870, 0x706050];
+    return [0x8090a0, 0x607080];
   }
 
   // R — row houses, brownstones, small residential
   if (prefix === 'R') {
-    if (era === 'gilded') return [0x7a5535, 0x5a3820, 0x9a7555];
-    if (era === 'prewar') return [0x9a7850, 0x7a5830, 0xb89870];
-    if (era === 'artdeco') return [0xb09060, 0x907040, 0xc8a870];
-    if (era === 'postwar') return [0xa09078, 0x807058, 0xb8a888];
-    return [0x98a8a0, 0x788890, 0xb0c0b8];
+    if (era === 'gilded') return [0x7a5535, 0x5a3820];
+    if (era === 'prewar') return [0x9a7850, 0x7a5830];
+    if (era === 'artdeco') return [0xb09060, 0x907040];
+    if (era === 'postwar') return [0xa09078, 0x807058];
+    return [0x98a8a0, 0x788890];
   }
 
   // O — offices
   if (prefix === 'O') {
-    if (era === 'gilded') return [0x9a9070, 0x7a7050, 0xb8b090]; // limestone
-    if (era === 'prewar') return [0xb0a080, 0x908060, 0xc8c0a0]; // limestone/marble
-    if (era === 'artdeco') return [0xb8a870, 0x907840, 0xd0c090]; // artdeco limestone
-    if (era === 'postwar') return [0x6880a0, 0x485878, 0x8898b8]; // curtain wall
-    return [0x708898, 0x506070, 0x90a8b8]; // glass curtain wall
+    if (era === 'gilded') return [0x9a9070, 0x7a7050];
+    if (era === 'prewar') return [0xb0a080, 0x908060];
+    if (era === 'artdeco') return [0xb8a870, 0x907840];
+    if (era === 'postwar') return [0x6880a0, 0x485878];
+    return [0x708898, 0x506070];
   }
 
   // H — hotels
   if (prefix === 'H') {
-    if (era === 'gilded') return [0x8878a0, 0x685878, 0xa898c0];
-    if (era === 'prewar') return [0x9080b0, 0x706090, 0xb0a0c8];
-    if (era === 'artdeco') return [0xa090b8, 0x8070a0, 0xc0b0d0];
-    if (era === 'postwar') return [0x7888a8, 0x586880, 0x98a8c0];
-    return [0x8090a8, 0x607080, 0xa0b0c0];
+    if (era === 'gilded') return [0x8878a0, 0x685878];
+    if (era === 'prewar') return [0x9080b0, 0x706090];
+    if (era === 'artdeco') return [0xa090b8, 0x8070a0];
+    if (era === 'postwar') return [0x7888a8, 0x586880];
+    return [0x8090a8, 0x607080];
   }
 
   // C — retail / commercial
   if (prefix === 'C') {
-    if (era === 'gilded') return [0xa06040, 0x804020, 0xc08060]; // dark brick
-    if (era === 'prewar') return [0xb07050, 0x905030, 0xc89070];
-    if (era === 'artdeco') return [0xc08058, 0xa06038, 0xd8a080]; // terracotta
-    if (era === 'postwar') return [0xb09080, 0x907060, 0xc8a898];
-    return [0x909898, 0x707878, 0xa8b0b0]; // modern concrete/glass
+    if (era === 'gilded') return [0xa06040, 0x804020];
+    if (era === 'prewar') return [0xb07050, 0x905030];
+    if (era === 'artdeco') return [0xc08058, 0xa06038];
+    if (era === 'postwar') return [0xb09080, 0x907060];
+    return [0x909898, 0x707878];
   }
 
-  // S — mixed use (gold / yellow brick)
+  // S — mixed use
   if (prefix === 'S') {
-    if (era === 'gilded') return [0x9a8840, 0x786820, 0xb8a860];
-    if (era === 'prewar') return [0xb09840, 0x907820, 0xc8b060];
-    if (era === 'artdeco') return [0xc0a848, 0xa08828, 0xd8c068];
-    if (era === 'postwar') return [0xb0a070, 0x908050, 0xc8b888];
-    return [0x909888, 0x707868, 0xa8b0a0];
+    if (era === 'gilded') return [0x9a8840, 0x786820];
+    if (era === 'prewar') return [0xb09840, 0x907820];
+    if (era === 'artdeco') return [0xc0a848, 0xa08828];
+    if (era === 'postwar') return [0xb0a070, 0x908050];
+    return [0x909888, 0x707868];
   }
 
   // L — loft / warehouse
   if (prefix === 'L') {
-    if (era === 'gilded') return [0x6a5040, 0x4a3020, 0x8a7060];
-    if (era === 'prewar') return [0x8a6848, 0x6a4828, 0xa08868];
-    if (era === 'artdeco') return [0xa08060, 0x806040, 0xb89878];
-    if (era === 'postwar') return [0x909090, 0x707070, 0xa8a8a8];
-    return [0x808898, 0x606870, 0x9898a8];
+    if (era === 'gilded') return [0x6a5040, 0x4a3020];
+    if (era === 'prewar') return [0x8a6848, 0x6a4828];
+    if (era === 'artdeco') return [0xa08060, 0x806040];
+    if (era === 'postwar') return [0x909090, 0x707070];
+    return [0x808898, 0x606870];
   }
 
   // F — factory / industrial
-  if (prefix === 'F') {
-    return [0x909898, 0x707878, 0xa8b0b0];
-  }
+  if (prefix === 'F') return [0x909898, 0x707878];
 
   // K/G — garages
-  if (prefix === 'K' || prefix === 'G') {
-    return [0x888888, 0x686868, 0xa0a0a0];
-  }
+  if (prefix === 'K' || prefix === 'G') return [0x888888, 0x686868];
 
-  // Default fallback
-  return [0x9aabb8, 0x7888a0, 0xb0c0c8];
-}
-
-// ---------------------------------------------------------------------------
-// Famous building stepped profiles
-// ---------------------------------------------------------------------------
-
-interface BuildingTier {
-  fromFrac: number; // fraction of total height where tier starts
-  toFrac: number;   // fraction of total height where tier ends
-  scale: number;    // XZ scale relative to full footprint (1.0 = full width)
-}
-
-// Keyed by PLUTO BBL (borough+block+lot string).
-// Each profile describes the stepped silhouette of the building.
-const FAMOUS_PROFILES: Record<string, BuildingTier[]> = {
-  // Empire State Building — Art Deco setbacks + mooring mast + spire
-  '1008350041': [
-    { fromFrac: 0.00, toFrac: 0.14, scale: 1.00 },
-    { fromFrac: 0.14, toFrac: 0.48, scale: 0.80 },
-    { fromFrac: 0.48, toFrac: 0.63, scale: 0.60 },
-    { fromFrac: 0.63, toFrac: 0.77, scale: 0.42 },
-    { fromFrac: 0.77, toFrac: 0.86, scale: 0.26 },
-    { fromFrac: 0.86, toFrac: 0.92, scale: 0.13 },
-    { fromFrac: 0.92, toFrac: 1.00, scale: 0.05 },
-  ],
-  // 30 Rockefeller Plaza — stepped Art Deco slab
-  '1012657501': [
-    { fromFrac: 0.00, toFrac: 0.10, scale: 1.00 },
-    { fromFrac: 0.10, toFrac: 0.50, scale: 0.86 },
-    { fromFrac: 0.50, toFrac: 0.68, scale: 0.68 },
-    { fromFrac: 0.68, toFrac: 0.83, scale: 0.52 },
-    { fromFrac: 0.83, toFrac: 1.00, scale: 0.38 },
-  ],
-};
-
-// Build an array of wall + roof-cap meshes for a stepped profile.
-// Each tier's footprint is the outerRing scaled by footprintScale * tier.scale.
-// Height uses only footprintScale so proportions stay consistent.
-function buildTieredMeshes(
-  outerRing: [number, number][],
-  tiers: BuildingTier[],
-  heightFt: number,
-  footprintScale: number,
-  wallMat: THREE.Material,
-  roofMat: THREE.Material,
-): THREE.Mesh[] {
-  const meshes: THREE.Mesh[] = [];
-  const renderedTotalH = heightFt * footprintScale;
-
-  for (const { fromFrac, toFrac, scale } of tiers) {
-    const startY = fromFrac * renderedTotalH;
-    const depth = (toFrac - fromFrac) * renderedTotalH;
-    const xzScale = footprintScale * scale;
-
-    const scaledRing = outerRing.map(([x, y]) => [x * xzScale, y * xzScale] as [number, number]);
-    const shape = new THREE.Shape();
-    shape.moveTo(scaledRing[0][0], scaledRing[0][1]);
-    for (let j = 1; j < scaledRing.length; j++) shape.lineTo(scaledRing[j][0], scaledRing[j][1]);
-    shape.closePath();
-
-    // Wall extrusion
-    const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
-    geo.rotateX(-Math.PI / 2);
-    geo.translate(0, startY, 0);
-    meshes.push(new THREE.Mesh(geo, wallMat));
-
-    // Roof/ledge cap on top of this tier (visible as the step ledge or final roof)
-    const roofGeo = new THREE.ShapeGeometry(shape);
-    roofGeo.rotateX(-Math.PI / 2);
-    roofGeo.translate(0, startY + depth, 0);
-    meshes.push(new THREE.Mesh(roofGeo, roofMat));
-  }
-
-  return meshes;
+  return [0x9aabb8, 0x7888a0];
 }
 
 // ---------------------------------------------------------------------------
@@ -195,7 +118,6 @@ function ringToLocalFt(ring: Ring, cx: number, cy: number): [number, number][] {
   ]);
 }
 
-// Signed area > 0 → CCW (correct for Three.js), < 0 → CW (must reverse)
 function signedArea2D(pts: [number, number][]): number {
   let area = 0;
   for (let i = 0; i < pts.length; i++) {
@@ -219,12 +141,12 @@ type GeoJSONGeom =
   | { type: 'MultiPolygon'; coordinates: Ring[][] };
 
 // Returns the outer ring of the footprint as local-ft coords, CCW-wound.
-function footprintToLocalFt(geom: GeoJSONGeom): [number, number][] {
+// cx/cy: WGS84 reference point to project relative to.
+function footprintToLocalFt(geom: GeoJSONGeom, cx: number, cy: number): [number, number][] {
   let outerRing: Ring;
   if (geom.type === 'Polygon') {
     outerRing = geom.coordinates[0];
   } else {
-    // MultiPolygon: pick the polygon with the largest bounding box area
     const polys = geom.coordinates.map(poly => poly[0]);
     polys.sort((a, b) => {
       const bboxArea = (r: Ring) => {
@@ -236,13 +158,89 @@ function footprintToLocalFt(geom: GeoJSONGeom): [number, number][] {
     outerRing = polys[0];
   }
 
-  const [cx, cy] = bboxCenter(outerRing);
   const local = ringToLocalFt(outerRing, cx, cy) as [number, number][];
-
-  // Ensure CCW winding — Three.js Shape treats CW as a hole
   if (signedArea2D(local) < 0) local.reverse();
-
   return local;
+}
+
+// Compute the WGS84 bounding-box center of the main footprint.
+function geomCenter(geom: GeoJSONGeom): [number, number] {
+  const outerRing = geom.type === 'Polygon'
+    ? geom.coordinates[0]
+    : geom.coordinates.map(p => p[0]).sort((a, b) => {
+        const bboxArea = (r: Ring) => {
+          const xs = r.map(p => p[0]), ys = r.map(p => p[1]);
+          return (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+        };
+        return bboxArea(b) - bboxArea(a);
+      })[0];
+  return bboxCenter(outerRing);
+}
+
+// ---------------------------------------------------------------------------
+// Geometry helpers
+// ---------------------------------------------------------------------------
+
+function ringToShape(ring: [number, number][]): THREE.Shape {
+  const shape = new THREE.Shape();
+  shape.moveTo(ring[0][0], ring[0][1]);
+  for (let i = 1; i < ring.length; i++) shape.lineTo(ring[i][0], ring[i][1]);
+  shape.closePath();
+  return shape;
+}
+
+function extrudedMesh(shape: THREE.Shape, depth: number, mat: THREE.Material, yBase: number): THREE.Mesh {
+  const geo = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false });
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, yBase, 0);
+  return new THREE.Mesh(geo, mat);
+}
+
+function roofCapMesh(shape: THREE.Shape, mat: THREE.Material, yTop: number): THREE.Mesh {
+  const geo = new THREE.ShapeGeometry(shape);
+  geo.rotateX(-Math.PI / 2);
+  geo.translate(0, yTop, 0);
+  return new THREE.Mesh(geo, mat);
+}
+
+// ---------------------------------------------------------------------------
+// OSM building:part renderer
+// ---------------------------------------------------------------------------
+//
+// Each part carries its own footprint polygon plus absolute min_height / height
+// values (in feet).  We project every part relative to the same WGS84 centre
+// so they all line up correctly, then extrude from min_height to height.
+
+function buildOsmPartMeshes(
+  parts: OsmPart[],
+  cx: number,
+  cy: number,
+  footprintScale: number,
+  wallMat: THREE.Material,
+  roofMat: THREE.Material,
+): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = [];
+
+  for (const part of parts) {
+    if (!part.height_ft) continue;
+
+    const ring = footprintToLocalFt(part.geometry as GeoJSONGeom, cx, cy);
+    const shape = ringToShape(ring);
+
+    // Scale to screen space
+    const scaledShape = new THREE.Shape(
+      shape.getPoints().map(p => new THREE.Vector2(p.x * footprintScale, p.y * footprintScale))
+    );
+
+    const yBase = part.min_height_ft * footprintScale;
+    const depth = (part.height_ft - part.min_height_ft) * footprintScale;
+    if (depth <= 0) continue;
+
+    meshes.push(extrudedMesh(scaledShape, depth, wallMat, yBase));
+    meshes.push(roofCapMesh(scaledShape, roofMat, yBase + depth));
+  }
+
+  return meshes;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,13 +272,12 @@ export function drawBuilding3d(
   // Camera — orthographic isometric
   // ------------------------------------------------------------------
   const aspect = (canvas.clientWidth || 400) / (canvas.clientHeight || 300);
-  const viewSize = 200; // half-height in feet
+  const viewSize = 200;
   const camera = new THREE.OrthographicCamera(
     -viewSize * aspect, viewSize * aspect,
     viewSize, -viewSize,
     -2000, 2000,
   );
-  // True isometric: camera sits at equal x/y/z distance from origin
   const camDist = 500;
   camera.position.set(camDist, camDist, camDist);
   camera.lookAt(0, 0, 0);
@@ -291,28 +288,23 @@ export function drawBuilding3d(
   // ------------------------------------------------------------------
   const scene = new THREE.Scene();
 
-  const ambient = new THREE.AmbientLight(0xffffff, 0.55);
-  scene.add(ambient);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.55));
 
-  // Key light from upper-right
   const dirLight = new THREE.DirectionalLight(0xfff8e8, 1.1);
   dirLight.position.set(300, 500, 200);
   scene.add(dirLight);
 
-  // Fill light (softer, from opposite side)
   const fillLight = new THREE.DirectionalLight(0xdde8ff, 0.35);
   fillLight.position.set(-200, 300, -300);
   scene.add(fillLight);
 
   // ------------------------------------------------------------------
-  // Build geometry
+  // Materials
   // ------------------------------------------------------------------
   const era = getEra(building.year_built);
   const [wallHex, roofHex] = getBuildingColors(building.building_class, era);
 
   const wallMat = new THREE.MeshLambertMaterial({ color: wallHex });
-  // polygonOffset pushes the roof cap in front of the extrusion's built-in top
-  // cap, preventing z-fighting as the building rotates.
   const roofMat = new THREE.MeshLambertMaterial({
     color: roofHex,
     polygonOffset: true,
@@ -320,43 +312,35 @@ export function drawBuilding3d(
     polygonOffsetUnits: -4,
   });
 
+  // ------------------------------------------------------------------
+  // Build geometry
+  // ------------------------------------------------------------------
   const heightFt = building.height_ft ?? Math.max(12, (building.num_floors ?? 4) * 12);
-
   let footprintScale = 1;
   const bodyMeshes: THREE.Mesh[] = [];
 
   if (building.the_geom) {
-    const outerRing = footprintToLocalFt(building.the_geom as GeoJSONGeom);
+    const geom = building.the_geom as GeoJSONGeom;
+    const [cx, cy] = geomCenter(geom);
+    const outerRing = footprintToLocalFt(geom, cx, cy);
 
-    // Scale footprint to fit view (keep height proportional)
+    // Derive scale from the main footprint bounding box
     const xs = outerRing.map(p => p[0]);
     const ys = outerRing.map(p => p[1]);
-    const bboxW = Math.max(...xs) - Math.min(...xs);
-    const bboxD = Math.max(...ys) - Math.min(...ys);
-    const maxFootprintDim = Math.max(bboxW, bboxD);
-    footprintScale = maxFootprintDim > 0 ? (viewSize * 0.7) / maxFootprintDim : 1;
+    const maxDim = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    footprintScale = maxDim > 0 ? (viewSize * 0.7) / maxDim : 1;
 
-    const profile = FAMOUS_PROFILES[building.bbl];
-    if (profile) {
-      // Stepped silhouette for famous buildings
-      bodyMeshes.push(...buildTieredMeshes(outerRing, profile, heightFt, footprintScale, wallMat, roofMat));
+    if (building.osm_parts?.length > 0) {
+      // OSM 3D parts — real geometry, no hardcoding
+      bodyMeshes.push(...buildOsmPartMeshes(building.osm_parts, cx, cy, footprintScale, wallMat, roofMat));
     } else {
-      // Standard single extrusion
-      const shape = new THREE.Shape();
-      shape.moveTo(outerRing[0][0], outerRing[0][1]);
-      for (let i = 1; i < outerRing.length; i++) shape.lineTo(outerRing[i][0], outerRing[i][1]);
-      shape.closePath();
-
-      const geo = new THREE.ExtrudeGeometry(shape, { depth: heightFt, bevelEnabled: false });
-      geo.rotateX(-Math.PI / 2);
-      geo.scale(footprintScale, footprintScale, footprintScale);
-      bodyMeshes.push(new THREE.Mesh(geo, wallMat));
-
-      const roofGeo = new THREE.ShapeGeometry(shape);
-      roofGeo.rotateX(-Math.PI / 2);
-      roofGeo.scale(footprintScale, footprintScale, footprintScale);
-      roofGeo.translate(0, heightFt * footprintScale, 0);
-      bodyMeshes.push(new THREE.Mesh(roofGeo, roofMat));
+      // Plain extrusion — correct for most buildings, great for distinctive footprints
+      const shape = ringToShape(outerRing);
+      const scaledShape = new THREE.Shape(
+        shape.getPoints().map(p => new THREE.Vector2(p.x * footprintScale, p.y * footprintScale))
+      );
+      bodyMeshes.push(extrudedMesh(scaledShape, heightFt * footprintScale, wallMat, 0));
+      bodyMeshes.push(roofCapMesh(scaledShape, roofMat, heightFt * footprintScale));
     }
   } else {
     // Fallback: rectangular box from lot/floor data
@@ -373,45 +357,31 @@ export function drawBuilding3d(
     shape.lineTo(-side / 2, side / 2);
     shape.closePath();
 
-    const geo = new THREE.ExtrudeGeometry(shape, { depth: heightFt, bevelEnabled: false });
-    geo.rotateX(-Math.PI / 2);
-    geo.scale(footprintScale, footprintScale, footprintScale);
-    bodyMeshes.push(new THREE.Mesh(geo, wallMat));
-
-    const roofGeo = new THREE.ShapeGeometry(shape);
-    roofGeo.rotateX(-Math.PI / 2);
-    roofGeo.scale(footprintScale, footprintScale, footprintScale);
-    roofGeo.translate(0, heightFt * footprintScale, 0);
-    bodyMeshes.push(new THREE.Mesh(roofGeo, roofMat));
+    const scaledShape = new THREE.Shape(
+      shape.getPoints().map(p => new THREE.Vector2(p.x * footprintScale, p.y * footprintScale))
+    );
+    bodyMeshes.push(extrudedMesh(scaledShape, heightFt * footprintScale, wallMat, 0));
+    bodyMeshes.push(roofCapMesh(scaledShape, roofMat, heightFt * footprintScale));
   }
 
-  // Group all building meshes so rotation is applied together
   const buildingGroup = new THREE.Group();
   for (const m of bodyMeshes) buildingGroup.add(m);
 
   // ------------------------------------------------------------------
   // Green roof overlay (score-based)
   // ------------------------------------------------------------------
-  let greenMesh: THREE.Mesh | null = null;
   if (score > 25 && building.the_geom) {
     const coverage = Math.min((score - 25) / 75, 1);
-    const outerRing = footprintToLocalFt(building.the_geom as GeoJSONGeom);
+    const geom = building.the_geom as GeoJSONGeom;
+    const [cx, cy] = geomCenter(geom);
+    const outerRing = footprintToLocalFt(geom, cx, cy);
 
-    const greenShape = new THREE.Shape();
-    greenShape.moveTo(outerRing[0][0], outerRing[0][1]);
-    for (let i = 1; i < outerRing.length; i++) {
-      greenShape.lineTo(outerRing[i][0], outerRing[i][1]);
-    }
-    greenShape.closePath();
+    const greenShape = new THREE.Shape(
+      outerRing.map(([x, y]) => new THREE.Vector2(x * footprintScale * coverage, y * footprintScale * coverage))
+    );
 
-    // Shrink by (1 - coverage) to represent partial coverage
     const greenGeo = new THREE.ShapeGeometry(greenShape);
     greenGeo.rotateX(-Math.PI / 2);
-    greenGeo.scale(
-      footprintScale * coverage,
-      footprintScale * coverage,
-      footprintScale * coverage,
-    );
     greenGeo.translate(0, heightFt * footprintScale + 0.5, 0);
 
     const greenMat = new THREE.MeshLambertMaterial({
@@ -422,8 +392,7 @@ export function drawBuilding3d(
       polygonOffsetFactor: -2,
       polygonOffsetUnits: -8,
     });
-    greenMesh = new THREE.Mesh(greenGeo, greenMat);
-    buildingGroup.add(greenMesh);
+    buildingGroup.add(new THREE.Mesh(greenGeo, greenMat));
   }
 
   scene.add(buildingGroup);
@@ -433,16 +402,12 @@ export function drawBuilding3d(
   // ------------------------------------------------------------------
   const renderedHeight = heightFt * footprintScale;
   const centerY = renderedHeight / 2;
-
-  // In isometric view the building's vertical extent projects onto screen Y.
-  // Use the larger of footprint half-size or the building's half-height so
-  // nothing gets clipped regardless of aspect ratio or building proportions.
   const neededHalf = Math.max(viewSize, centerY * 1.25);
+
   camera.top = neededHalf;
   camera.bottom = -neededHalf;
   camera.left = -neededHalf * aspect;
   camera.right = neededHalf * aspect;
-  // Shift lookAt to vertical center so the building is centered in the frame
   camera.position.set(camDist, camDist + centerY, camDist);
   camera.lookAt(0, centerY, 0);
   camera.updateProjectionMatrix();

@@ -8,6 +8,7 @@ from dataclasses import asdict
 from services.geocoder import geocode_address
 from services.pluto import get_building
 from services.footprint import get_footprint
+from services.osm3d import fetch_building_parts
 from services.scorer import score_green_roof
 
 app = FastAPI(title="Trellis API", version="0.1.0")
@@ -37,11 +38,12 @@ async def score_address(req: ScoreRequest):
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
-    # 2. Fetch PLUTO + Building Footprints in parallel
+    # 2. Fetch PLUTO + Building Footprints + OSM 3D parts in parallel
     try:
-        building, footprint = await asyncio.gather(
+        building, footprint, osm_parts = await asyncio.gather(
             get_building(geo["bbl"]),
             get_footprint(geo["bbl"]),
+            fetch_building_parts(geo["lat"], geo["lng"]),
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -52,6 +54,8 @@ async def score_address(req: ScoreRequest):
         building["height_ft"] = None
         building["footprint_area"] = None
         building["the_geom"] = None
+
+    building["osm_parts"] = osm_parts
 
     # 3. Score
     result = score_green_roof(building)
