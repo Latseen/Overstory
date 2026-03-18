@@ -252,9 +252,8 @@ function buildOsmPartMeshes(
   footprintScale: number,
   wallMat: THREE.Material,
   roofMat: THREE.Material,
-  edgeMat: THREE.LineBasicMaterial,
-): THREE.Object3D[] {
-  const objects: THREE.Object3D[] = [];
+): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = [];
 
   const filtered = filterPartsToBuilding(parts, mainGeom);
 
@@ -270,20 +269,11 @@ function buildOsmPartMeshes(
     const depth = (part.height_ft - part.min_height_ft) * footprintScale;
     if (depth <= 0) continue;
 
-    // Solid wall + roof cap
-    objects.push(extrudedMesh(scaledShape, depth, wallMat, yBase));
-    objects.push(roofCapMesh(scaledShape, roofMat, yBase + depth));
-
-    // Edge lines — trace the top perimeter of each part so step boundaries
-    // read as crisp architectural setback lines rather than blurry block seams
-    const pts2d = scaledShape.getPoints();
-    const edgePts = pts2d.map(p => new THREE.Vector3(p.x, yBase + depth, p.y));
-    edgePts.push(edgePts[0]); // close the loop
-    const edgeGeo = new THREE.BufferGeometry().setFromPoints(edgePts);
-    objects.push(new THREE.Line(edgeGeo, edgeMat));
+    meshes.push(extrudedMesh(scaledShape, depth, wallMat, yBase));
+    meshes.push(roofCapMesh(scaledShape, roofMat, yBase + depth));
   }
 
-  return objects;
+  return meshes;
 }
 
 // ---------------------------------------------------------------------------
@@ -354,19 +344,13 @@ export function drawBuilding3d(
     polygonOffsetFactor: -1,
     polygonOffsetUnits: -4,
   });
-  // Edge lines drawn on top of each part's roof perimeter — a slightly darker
-  // tint of the wall colour so setback boundaries read as architectural lines.
-  const edgeMat = new THREE.LineBasicMaterial({
-    color: new THREE.Color(wallHex).multiplyScalar(0.55),
-    linewidth: 1,
-  });
 
   // ------------------------------------------------------------------
   // Build geometry
   // ------------------------------------------------------------------
   const heightFt = building.height_ft ?? Math.max(12, (building.num_floors ?? 4) * 12);
   let footprintScale = 1;
-  const bodyMeshes: THREE.Object3D[] = [];
+  const bodyMeshes: THREE.Mesh[] = [];
 
   if (building.the_geom) {
     const geom = building.the_geom as GeoJSONGeom;
@@ -381,7 +365,7 @@ export function drawBuilding3d(
 
     if (building.osm_parts?.length > 0) {
       // OSM 3D parts — real geometry, no hardcoding
-      bodyMeshes.push(...buildOsmPartMeshes(building.osm_parts, geom, cx, cy, footprintScale, wallMat, roofMat, edgeMat));
+      bodyMeshes.push(...buildOsmPartMeshes(building.osm_parts, geom, cx, cy, footprintScale, wallMat, roofMat));
     } else {
       // Plain extrusion — correct for most buildings, great for distinctive footprints
       const shape = ringToShape(outerRing);
@@ -480,7 +464,7 @@ export function drawBuilding3d(
   function cleanup() {
     cancelAnimationFrame(rafId);
     buildingGroup.traverse(obj => {
-      if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
+      if (obj instanceof THREE.Mesh) {
         obj.geometry.dispose();
         (obj.material as THREE.Material).dispose();
       }
