@@ -27,9 +27,11 @@ async def get_footprint(bbl: str) -> dict | None:
             return None
 
         b = data[0]
-        height = _float(b.get("heightroof"))
+        height = _float(b.get("height_roof"))   # Socrata field name has underscore
         area = _float(b.get("shape_area"))
         geom = b.get("the_geom")  # GeoJSON polygon, WGS84
+        bin_num = b.get("bin")    # Building Identification Number (NYC 3D Model key)
+        doitt_id = b.get("doitt_id")  # Links building to NYC 3D Building Model dataset
 
         if height is not None and (height < 5 or height > 2000):
             height = None
@@ -43,6 +45,8 @@ async def get_footprint(bbl: str) -> dict | None:
             "height_ft": height,
             "footprint_area": area,
             "the_geom": geom,
+            "bin": bin_num,
+            "doitt_id": doitt_id,
         }
 
     except Exception:

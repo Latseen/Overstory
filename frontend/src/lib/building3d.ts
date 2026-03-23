@@ -381,31 +381,61 @@ export function drawBuilding3d(
   // ------------------------------------------------------------------
   const heightFt = building.height_ft ?? Math.max(12, (building.num_floors ?? 4) * 12);
   let footprintScale = 1;
+  // cx/cy: WGS84 centre used for local-ft projection of all geometry in this scene.
+  let cx = 0, cy = 0;
+  // Bounding dimensions from OSM parts (ft) — used for green overlay when no the_geom.
+  let osmBboxWidthFt = 0, osmBboxDepthFt = 0;
   const bodyMeshes: THREE.Mesh[] = [];
 
-  if (building.the_geom) {
-    const geom = building.the_geom as GeoJSONGeom;
-    const [cx, cy] = geomCenter(geom);
-    const outerRing = footprintToLocalFt(geom, cx, cy);
+  if (building.osm_parts?.length > 0) {
+    // When OSM parts are available always derive cx/cy/footprintScale from their
+    // bounding box.  This avoids two failure modes:
+    //   1. the_geom missing (e.g. Rockefeller Center condo lot not in footprints)
+    //   2. the_geom is a small service-building footprint at the same BBL (e.g.
+    //      1 WTC) which would produce a wildly incorrect footprintScale.
+    const partsWithH = building.osm_parts.filter(p => p.height_ft != null);
+    let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity;
+    for (const part of partsWithH) {
+      for (const [lng, lat] of part.geometry.coordinates[0]) {
+        if (lng < minLng) minLng = lng; if (lng > maxLng) maxLng = lng;
+        if (lat < minLat) minLat = lat; if (lat > maxLat) maxLat = lat;
+      }
+    }
+    cx = (minLng + maxLng) / 2;
+    cy = (minLat + maxLat) / 2;
+    osmBboxWidthFt = (maxLng - minLng) * FT_PER_DEG_LNG;
+    osmBboxDepthFt = (maxLat - minLat) * FT_PER_DEG_LAT;
+    const maxDim = Math.max(osmBboxWidthFt, osmBboxDepthFt);
+    footprintScale = maxDim > 0 ? (viewSize * 0.7) / maxDim : 1;
 
-    // Derive scale from the main footprint bounding box
+    // Synthetic bounding-box geom used only so filterPartsToBuilding doesn't
+    // reject any of the parts we already know belong to this building.
+    const syntheticGeom: GeoJSONGeom = {
+      type: 'Polygon',
+      coordinates: [[
+        [minLng, minLat], [maxLng, minLat],
+        [maxLng, maxLat], [minLng, maxLat],
+        [minLng, minLat],
+      ]],
+    };
+    bodyMeshes.push(...buildOsmPartMeshes(
+      building.osm_parts, syntheticGeom, cx, cy, footprintScale, wallMat, roofMat,
+    ));
+  } else if (building.the_geom) {
+    // No OSM parts — plain extrusion of the footprint polygon.
+    const geom = building.the_geom as GeoJSONGeom;
+    [cx, cy] = geomCenter(geom);
+    const outerRing = footprintToLocalFt(geom, cx, cy);
     const xs = outerRing.map(p => p[0]);
     const ys = outerRing.map(p => p[1]);
     const maxDim = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
     footprintScale = maxDim > 0 ? (viewSize * 0.7) / maxDim : 1;
 
-    if (building.osm_parts?.length > 0) {
-      // OSM 3D parts — real geometry, no hardcoding
-      bodyMeshes.push(...buildOsmPartMeshes(building.osm_parts, geom, cx, cy, footprintScale, wallMat, roofMat));
-    } else {
-      // Plain extrusion — correct for most buildings, great for distinctive footprints
-      const shape = ringToShape(outerRing);
-      const scaledShape = new THREE.Shape(
-        shape.getPoints().map(p => new THREE.Vector2(p.x * footprintScale, p.y * footprintScale))
-      );
-      bodyMeshes.push(extrudedMesh(scaledShape, heightFt * footprintScale, wallMat, 0));
-      bodyMeshes.push(roofCapMesh(scaledShape, roofMat, heightFt * footprintScale));
-    }
+    const scaledShape = new THREE.Shape(
+      outerRing.map(([x, y]) => new THREE.Vector2(x * footprintScale, y * footprintScale))
+    );
+    bodyMeshes.push(extrudedMesh(scaledShape, heightFt * footprintScale, wallMat, 0));
+    bodyMeshes.push(roofCapMesh(scaledShape, roofMat, heightFt * footprintScale));
   } else {
     // Fallback: rectangular box from lot/floor data
     const floorArea = building.bld_area
@@ -413,17 +443,14 @@ export function drawBuilding3d(
       : building.lot_area ?? 3000;
     const side = Math.sqrt(Math.max(floorArea, 400));
     footprintScale = (viewSize * 0.7) / side;
+    osmBboxWidthFt = side; osmBboxDepthFt = side; // reuse for green overlay sizing
 
-    const shape = new THREE.Shape();
-    shape.moveTo(-side / 2, -side / 2);
-    shape.lineTo(side / 2, -side / 2);
-    shape.lineTo(side / 2, side / 2);
-    shape.lineTo(-side / 2, side / 2);
-    shape.closePath();
-
-    const scaledShape = new THREE.Shape(
-      shape.getPoints().map(p => new THREE.Vector2(p.x * footprintScale, p.y * footprintScale))
-    );
+    const scaledShape = new THREE.Shape([
+      new THREE.Vector2(-side / 2 * footprintScale, -side / 2 * footprintScale),
+      new THREE.Vector2( side / 2 * footprintScale, -side / 2 * footprintScale),
+      new THREE.Vector2( side / 2 * footprintScale,  side / 2 * footprintScale),
+      new THREE.Vector2(-side / 2 * footprintScale,  side / 2 * footprintScale),
+    ]);
     bodyMeshes.push(extrudedMesh(scaledShape, heightFt * footprintScale, wallMat, 0));
     bodyMeshes.push(roofCapMesh(scaledShape, roofMat, heightFt * footprintScale));
   }
@@ -450,38 +477,35 @@ export function drawBuilding3d(
 
   if (score > 25) {
     const coverage = Math.min((score - 25) / 75, 1);
-    // Use sqrt so the visible patch is area-proportional to the score.
-    const patchScale = footprintScale * Math.sqrt(coverage);
+    // sqrt so the visible patch is area-proportional to the score.
+    const sqrtCov = Math.sqrt(coverage);
 
-    if (building.the_geom) {
+    let greenShape: THREE.Shape;
+
+    if (building.the_geom && building.osm_parts?.length === 0) {
+      // Buildings rendered from the_geom: use the actual footprint polygon so
+      // the green patch matches the building outline (e.g. Flatiron's triangle).
       const geom = building.the_geom as GeoJSONGeom;
-      const [cx, cy] = geomCenter(geom);
       const outerRing = footprintToLocalFt(geom, cx, cy);
-      const greenShape = new THREE.Shape(
-        outerRing.map(([x, y]) => new THREE.Vector2(x * patchScale, y * patchScale))
+      greenShape = new THREE.Shape(
+        outerRing.map(([x, y]) => new THREE.Vector2(x * footprintScale * sqrtCov, y * footprintScale * sqrtCov))
       );
-      const greenGeo = new THREE.ShapeGeometry(greenShape);
-      greenGeo.rotateX(-Math.PI / 2);
-      greenGeo.translate(0, actualMaxY + 0.5, 0);
-      buildingGroup.add(new THREE.Mesh(greenGeo, greenMat));
     } else {
-      // Rectangular fallback: scale the same square shape used for the body.
-      const floorArea = building.bld_area
-        ? building.bld_area / Math.max(building.num_floors ?? 1, 1)
-        : building.lot_area ?? 3000;
-      const side = Math.sqrt(Math.max(floorArea, 400));
-      const halfSide = (side / 2) * patchScale;
-      const greenShape = new THREE.Shape();
-      greenShape.moveTo(-halfSide, -halfSide);
-      greenShape.lineTo( halfSide, -halfSide);
-      greenShape.lineTo( halfSide,  halfSide);
-      greenShape.lineTo(-halfSide,  halfSide);
+      // OSM-parts buildings and rectangular fallbacks: rectangular patch sized
+      // from the bounding box so the overlay always covers the right area.
+      const halfW = (osmBboxWidthFt / 2) * footprintScale * sqrtCov;
+      const halfD = (osmBboxDepthFt / 2) * footprintScale * sqrtCov;
+      greenShape = new THREE.Shape([
+        new THREE.Vector2(-halfW, -halfD), new THREE.Vector2( halfW, -halfD),
+        new THREE.Vector2( halfW,  halfD), new THREE.Vector2(-halfW,  halfD),
+      ]);
       greenShape.closePath();
-      const greenGeo = new THREE.ShapeGeometry(greenShape);
-      greenGeo.rotateX(-Math.PI / 2);
-      greenGeo.translate(0, actualMaxY + 0.5, 0);
-      buildingGroup.add(new THREE.Mesh(greenGeo, greenMat));
     }
+
+    const greenGeo = new THREE.ShapeGeometry(greenShape);
+    greenGeo.rotateX(-Math.PI / 2);
+    greenGeo.translate(0, actualMaxY + 0.5, 0);
+    buildingGroup.add(new THREE.Mesh(greenGeo, greenMat));
   }
 
   scene.add(buildingGroup);

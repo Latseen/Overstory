@@ -48,6 +48,10 @@ export interface Building {
   land_use: string;
   owner_name: string;
   condo_flag: boolean;
+  /** Building Identification Number — key into the NYC 3D Building Model dataset */
+  bin: string | null;
+  /** Links this building to the NYC 3D Building Model (DOITT_ID field) */
+  doitt_id: string | null;
 }
 
 export interface ScoreResponse {
